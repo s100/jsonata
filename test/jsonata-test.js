@@ -11,6 +11,104 @@ var assert = require('assert');
 var chai = require("chai");
 var expect = chai.expect;
 
+/***/
+var fs = require("fs");
+
+var deleteFolderRecursive = function(path) {
+    if( fs.existsSync(path) ) {
+        fs.readdirSync(path).forEach(function(file,index){
+            var curPath = path + "/" + file;
+            if(fs.lstatSync(curPath).isDirectory()) {
+                deleteFolderRecursive(curPath);
+            } else { // delete file
+                fs.unlinkSync(curPath);
+            }
+        });
+        fs.rmdirSync(path);
+    }
+};
+deleteFolderRecursive("DUMP");
+
+var oldit = it;
+it = function() {
+    var oldF = arguments[1];
+    arguments[1] = function() {
+        var path = [];
+        for(var x = this.test; x.parent; x = x.parent) {
+            path.push(x.title);
+        }
+        global._p_a_t_h_ = ["DUMP"].concat(path.reverse());
+        return oldF.apply(this, arguments);
+    };
+    return oldit.apply(this, arguments);
+};
+
+var oldjsonata = jsonata;
+jsonata = function(expr) {
+
+    // Build test output directories
+    var x = "";
+    global._p_a_t_h_.forEach(function(element) {
+        x += element
+            .replace(/:/g, "%3A")
+            .replace(/"/g, "%22")
+            .replace(/\*/g, "%2A")
+            .replace(/</g, "%3C")
+            .replace(/>/g, "%3E")
+            .replace(/\n/g, "%0A")
+            .replace(/\?/g, "%3F")
+            .replace(/\t/g, "%09")
+            .replace(/\\/g, "%5C")
+            .replace(/\//g, "%2F")
+            .replace(/\|/g, "%7C") + "/";
+        if(!fs.existsSync(x)) {
+            fs.mkdirSync(x);
+        }
+    });
+    fs.writeFileSync(x + "expression.jsonata", expr);
+
+    var expression = oldjsonata.apply(this, arguments);
+
+    var boop = {};
+
+    var oldassign = expression.assign;
+    expression.assign = function(name, value) {
+        // Several tests attempt to bind functions. We can't handle that :-/
+        boop[name] = value;
+        return oldassign.apply(this, arguments);
+    };
+
+    var oldevaluate = expression.evaluate;
+    expression.evaluate = function(input, bindings, callback) {
+        fs.writeFileSync(x + "input.json", JSON.stringify(input === undefined ? null : input, null, 4));
+
+        // Only ONE test case uses this!
+        boop = Object.assign(boop, bindings);
+
+        if(Object.keys(boop).length > 0) {
+            fs.writeFileSync(x + "bindings.json", JSON.stringify(boop, null, 4));
+        }
+
+        if(typeof callback === 'function') {
+            var oldcallback = callback;
+            callback = function(err, value) {
+                if(arguments.length >= 2) {
+                    fs.writeFileSync(x + "output.json", JSON.stringify(value === undefined ? null : value, null, 4));
+                }
+                oldcallback.apply(this, arguments);
+            };
+            oldevaluate.apply(this, arguments);
+        } else {
+            var value = oldevaluate.apply(this, arguments);
+            fs.writeFileSync(x + "output.json", JSON.stringify(value === undefined ? null : value, null, 4));
+            return value;
+        }
+    };
+
+    return expression;
+};
+/***/
+
 var testdata1 = {
     "foo": {
         "bar": 42,
@@ -313,7 +411,6 @@ function timeboxExpression(expr, timeout, maxDepth) {
         checkRunnaway();
     });
 }
-
 
 describe('Evaluator - simple literals', function () {
     describe('"hello"', function () {
@@ -3263,18 +3360,18 @@ describe('Evaluator - functions: string', function () {
     describe('$string() of JSON objects', function () {
         it('should return result object', function () {
             var expr = jsonata('$string({' +
-              '  "string": "hello",' +
-              '  "number": 78.8 / 2,' +
-              '  "null":null,' +
-              '  "boolean": false,' +
-              '  "function": $sum,' +
-              '  "lambda": function(){true},' +
-              '  "object": {' +
-              '    "str": "another",' +
-              '    "lambda2": function($n){$n}' +
-              '  },' +
-              '  "array": []' +
-              '})');
+                '  "string": "hello",' +
+                '  "number": 78.8 / 2,' +
+                '  "null":null,' +
+                '  "boolean": false,' +
+                '  "function": $sum,' +
+                '  "lambda": function(){true},' +
+                '  "object": {' +
+                '    "str": "another",' +
+                '    "lambda2": function($n){$n}' +
+                '  },' +
+                '  "array": []' +
+                '})');
             var result = expr.evaluate();
             var expected = '{"string":"hello","number":39.4,"null":null,"boolean":false,"function":"","lambda":"","object":{"str":"another","lambda2":""},"array":[]}';
             expect(result).to.deep.equal(expected);
@@ -6305,11 +6402,11 @@ describe('Evaluator - object constructor', function () {
     describe('Object & array transform', function () {
         it('should return result object', function () {
             var expr = jsonata('Account.Order{' +
-              '  OrderID: {' +
-              '    "TotalPrice":$sum(Product.(Price * Quantity)),' +
-              '    "Items": Product."Product Name"' +
-              '  }' +
-              '}');
+                '  OrderID: {' +
+                '    "TotalPrice":$sum(Product.(Price * Quantity)),' +
+                '    "Items": Product."Product Name"' +
+                '  }' +
+                '}');
             var result = expr.evaluate(testdata2);
             var expected = {
                 "order103": {
@@ -6334,19 +6431,19 @@ describe('Evaluator - object constructor', function () {
     describe('Invoice transformation', function () {
         it('should return result object', function () {
             var expr = jsonata('{' +
-              '  "Order": Account.Order.{' +
-              '      "ID": OrderID,' +
-              '      "Product": Product.{' +
-              '          "Name": $."Product Name",' +
-              '          "SKU": ProductID,' +
-              '          "Details": {' +
-              '            "Weight": Description.Weight,' +
-              '            "Dimensions": Description.(Width & " x " & Height & " x " & Depth)' +
-              '          }' +
-              '        },' +
-              '      "Total Price": $sum(Product.(Price * Quantity))' +
-              '    }' +
-              '}');
+                '  "Order": Account.Order.{' +
+                '      "ID": OrderID,' +
+                '      "Product": Product.{' +
+                '          "Name": $."Product Name",' +
+                '          "SKU": ProductID,' +
+                '          "Details": {' +
+                '            "Weight": Description.Weight,' +
+                '            "Dimensions": Description.(Width & " x " & Height & " x " & Depth)' +
+                '          }' +
+                '        },' +
+                '      "Total Price": $sum(Product.(Price * Quantity))' +
+                '    }' +
+                '}');
             var result = expr.evaluate(testdata2);
             var expected = {
                 "Order": [
@@ -6981,10 +7078,10 @@ describe('Evaluator - Lambda functions', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '            (' +
-              '              $even := function($n) { $n = 0 ? true : $odd($n-1) };' +
-              '              $odd := function($n) { $n = 0 ? false : $even($n-1) };' +
-              '              $even(82)' +
-              '            )');
+                '              $even := function($n) { $n = 0 ? true : $odd($n-1) };' +
+                '              $odd := function($n) { $n = 0 ? false : $even($n-1) };' +
+                '              $even(82)' +
+                '            )');
             var result = expr.evaluate();
             var expected = true;
             expect(result).to.deep.equal(expected);
@@ -6995,9 +7092,9 @@ describe('Evaluator - Lambda functions', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '            (' +
-              '              $even := function($n) { $n = 0 ? true : $odd($n-1) }; ' +
-              '              $odd := function($n) { $n = 0 ? false : $even($n-1) }; ' +
-              '              $even(65) )');
+                '              $even := function($n) { $n = 0 ? true : $odd($n-1) }; ' +
+                '              $odd := function($n) { $n = 0 ? false : $even($n-1) }; ' +
+                '              $even(65) )');
             var result = expr.evaluate();
             var expected = false;
             expect(result).to.deep.equal(expected);
@@ -7022,9 +7119,9 @@ describe('Evaluator - Lambda functions', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $gcd := λ($a, $b){$b = 0 ? $a : $gcd($b, $a%$b) };' +
-              '  [$gcd(8,12), $gcd(9,12)]' +
-              ')' );
+                '  $gcd := λ($a, $b){$b = 0 ? $a : $gcd($b, $a%$b) };' +
+                '  [$gcd(8,12), $gcd(9,12)]' +
+                ')' );
             var result = expr.evaluate();
             var expected = [4,3];
             expect(result).to.deep.equal(expected);
@@ -7074,9 +7171,9 @@ describe('Evaluator - Tail recursion', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '            (' +
-              '              $f := function($n){()};' +
-              '              $f(1)' +
-              '            ) ' );
+                '              $f := function($n){()};' +
+                '              $f(1)' +
+                '            ) ' );
             var result = expr.evaluate();
             var expected = undefined;
             expect(result).to.deep.equal(expected);
@@ -7087,9 +7184,9 @@ describe('Evaluator - Tail recursion', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $factorial := function($n){$n = 0 ? 1 : $n * $factorial($n - 1)};' +
-              '  $factorial(99)' +
-              ')             ');
+                '  $factorial := function($n){$n = 0 ? 1 : $n * $factorial($n - 1)};' +
+                '  $factorial(99)' +
+                ')             ');
             timeboxExpression(expr, 1000, 302);
             var result = expr.evaluate();
             var expected = 9.33262154439441e+155;
@@ -7102,9 +7199,9 @@ describe('Evaluator - Tail recursion', function () {
             expect(function () {
                 var expr = jsonata(
                     '(' +
-                  '  $factorial := function($n){$n = 0 ? 1 : $n * $factorial($n - 1)};' +
-                  '  $factorial(100)' +
-                  ')             ');
+                    '  $factorial := function($n){$n = 0 ? 1 : $n * $factorial($n - 1)};' +
+                    '  $factorial(100)' +
+                    ')             ');
                 timeboxExpression(expr, 1000, 302);
                 expr.evaluate();
             }).to.throw()
@@ -7116,15 +7213,15 @@ describe('Evaluator - Tail recursion', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $factorial := function($n){(' +
-              '    $iter := function($n, $acc) {' +
-              '      $n = 0 ? $acc : $iter($n - 1, $n * $acc)' +
-              '    };' +
-              '    $iter($n, 1)' +
-              '  )};' +
-              '  $factorial(5)' +
-              ') ' +
-              '');
+                '  $factorial := function($n){(' +
+                '    $iter := function($n, $acc) {' +
+                '      $n = 0 ? $acc : $iter($n - 1, $n * $acc)' +
+                '    };' +
+                '    $iter($n, 1)' +
+                '  )};' +
+                '  $factorial(5)' +
+                ') ' +
+                '');
             var result = expr.evaluate();
             var expected = 120;
             expect(result).to.deep.equal(expected);
@@ -7135,15 +7232,15 @@ describe('Evaluator - Tail recursion', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $factorial := function($n){(' +
-              '    $iter := function($n, $acc) {' +
-              '      $n = 0 ? $acc : $iter($n - 1, $n * $acc)' +
-              '    };' +
-              '    $iter($n, 1)' +
-              '  )};' +
-              '  $factorial(150)' +
-              ') ' +
-              '');
+                '  $factorial := function($n){(' +
+                '    $iter := function($n, $acc) {' +
+                '      $n = 0 ? $acc : $iter($n - 1, $n * $acc)' +
+                '    };' +
+                '    $iter($n, 1)' +
+                '  )};' +
+                '  $factorial(150)' +
+                ') ' +
+                '');
             var result = expr.evaluate();
             var expected = 5.7133839564458575e+262;
             expect(result).to.deep.equal(expected);
@@ -7155,9 +7252,9 @@ describe('Evaluator - Tail recursion', function () {
             expect(function () {
                 var expr = jsonata(
                     '(' +
-                  '  $inf := function($n){$n+$inf($n-1)};' +
-                  '  $inf(5)' +
-                  ')' );
+                    '  $inf := function($n){$n+$inf($n-1)};' +
+                    '  $inf(5)' +
+                    ')' );
                 timeboxExpression(expr, 1000, 300);
                 expr.evaluate();
             }).to.throw()
@@ -7171,9 +7268,9 @@ describe('Evaluator - Tail recursion', function () {
             expect(function () {
                 var expr = jsonata(
                     '(' +
-                  '  $inf := function(){$inf()};' +
-                  '  $inf()' +
-                  ')' );
+                    '  $inf := function(){$inf()};' +
+                    '  $inf()' +
+                    ')' );
                 timeboxExpression(expr, 1000, 500);
                 expr.evaluate();
             }).to.throw()
@@ -7270,9 +7367,9 @@ describe('Evaluator - Block expressions', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $func := function($arg) {$arg.Account.Order[0].OrderID};' +
-              '  $func($)' +
-              ')');
+                '  $func := function($arg) {$arg.Account.Order[0].OrderID};' +
+                '  $func($)' +
+                ')');
             var result = expr.evaluate(testdata2);
             var expected = 'order103';
             expect(result).to.deep.equal(expected);
@@ -7283,9 +7380,9 @@ describe('Evaluator - Block expressions', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $func := function($arg) {$arg.Account.Order[0]};' +
-              '  $func($).OrderID' +
-              ')' );
+                '  $func := function($arg) {$arg.Account.Order[0]};' +
+                '  $func($).OrderID' +
+                ')' );
             var result = expr.evaluate(testdata2);
             var expected = 'order103';
             expect(result).to.deep.equal(expected);
@@ -7392,10 +7489,10 @@ describe('Evaluator - Partial function application', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $firstn := $substr(?, 0, ?);' +
-              '  $first5 := $firstn(?, 5);' +
-              '  $first5("Hello World")' +
-              ')'
+                '  $firstn := $substr(?, 0, ?);' +
+                '  $first5 := $firstn(?, 5);' +
+                '  $first5("Hello World")' +
+                ')'
             );
             expr.assign('substr', function(str, start, len) {
                 return str.substr(start, len);
@@ -7415,13 +7512,13 @@ describe('HOF - map', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $data := {' +
-              '    "one": [1,2,3,4,5],' +
-              '    "two": [5,4,3,2,1]' +
-              '  };' +
-              '  $add := function($x){$x*$x};' +
-              '  $map($data.one, $add) ' +
-              ')  ');
+                '  $data := {' +
+                '    "one": [1,2,3,4,5],' +
+                '    "two": [5,4,3,2,1]' +
+                '  };' +
+                '  $add := function($x){$x*$x};' +
+                '  $map($data.one, $add) ' +
+                ')  ');
             var result = expr.evaluate(null);
             var expected = [1, 4, 9, 16, 25];
             expect(result).to.deep.equal(expected);
@@ -7432,13 +7529,13 @@ describe('HOF - map', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $data := {' +
-              '    "one": [1,2,3,4,5],' +
-              '    "two": [5,4,3,2,1]' +
-              '  };' +
-              '  $add := function($x){$x*$x};' +
-              '  $map($add) ' +
-              ')  ');
+                '  $data := {' +
+                '    "one": [1,2,3,4,5],' +
+                '    "two": [5,4,3,2,1]' +
+                '  };' +
+                '  $add := function($x){$x*$x};' +
+                '  $map($add) ' +
+                ')  ');
             expect(function () {
                 expr.evaluate();
             }).to.throw()
@@ -7582,12 +7679,12 @@ describe('HOF - zip/map', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $data := {' +
-              '    "one": [1,2,3,4,5],' +
-              '    "two": [5,4,3,2,1]' +
-              '  };' +
-              '  $map($zip($data.one, $data.two), $sum)' +
-              ') ');
+                '  $data := {' +
+                '    "one": [1,2,3,4,5],' +
+                '    "two": [5,4,3,2,1]' +
+                '  };' +
+                '  $map($zip($data.one, $data.two), $sum)' +
+                ') ');
             var result = expr.evaluate(null);
             var expected = [6, 6, 6, 6, 6];
             expect(result).to.deep.equal(expected);
@@ -7598,12 +7695,12 @@ describe('HOF - zip/map', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $data := {' +
-              '    "one": [1,2,3,4,5],' +
-              '    "two": [5,4,3,2,1]' +
-              '  };' +
-              '  $data.$zip(one, two) ~> $map($sum)' +
-              ') ');
+                '  $data := {' +
+                '    "one": [1,2,3,4,5],' +
+                '    "two": [5,4,3,2,1]' +
+                '  };' +
+                '  $data.$zip(one, two) ~> $map($sum)' +
+                ') ');
             var result = expr.evaluate(null);
             var expected = [6, 6, 6, 6, 6];
             expect(result).to.deep.equal(expected);
@@ -7614,12 +7711,12 @@ describe('HOF - zip/map', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $data := {' +
-              '    "one": [1],' +
-              '    "two": [5]' +
-              '  };' +
-              '  $data[].$zip(one, two) ~> $map($sum)' +
-              ') ');
+                '  $data := {' +
+                '    "one": [1],' +
+                '    "two": [5]' +
+                '  };' +
+                '  $data[].$zip(one, two) ~> $map($sum)' +
+                ') ');
             var result = expr.evaluate(null);
             var expected = [6];
             expect(result).to.deep.equal(expected);
@@ -7630,12 +7727,12 @@ describe('HOF - zip/map', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $data := {' +
-              '    "one": 1,' +
-              '    "two": 5' +
-              '  };' +
-              '  $data[].$zip(one, two) ~> $map($sum)' +
-              ') ');
+                '  $data := {' +
+                '    "one": 1,' +
+                '    "two": 5' +
+                '  };' +
+                '  $data[].$zip(one, two) ~> $map($sum)' +
+                ') ');
             var result = expr.evaluate(null);
             var expected = [6];
             expect(result).to.deep.equal(expected);
@@ -7649,9 +7746,9 @@ describe('HOF - reduce', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $seq := [1,2,3,4,5];' +
-              '  $reduce($seq, function($x, $y){$x+$y})' +
-              ') ');
+                '  $seq := [1,2,3,4,5];' +
+                '  $reduce($seq, function($x, $y){$x+$y})' +
+                ') ');
             var result = expr.evaluate(null);
             var expected = 15;
             expect(result).to.deep.equal(expected);
@@ -7661,12 +7758,12 @@ describe('HOF - reduce', function () {
     describe('join numbers in an array as a string', function () {
         it('should return result object', function () {
             var expr = jsonata("" +
-              "(" +
-              "  $concat := function($s){function($a, $b){$string($a) & $s & $string($b)}};" +
-              "  $comma_join := $concat(' ... ');" +
-              "  $reduce([1,2,3,4,5], $comma_join)" +
-              ")" +
-              "      ");
+                "(" +
+                "  $concat := function($s){function($a, $b){$string($a) & $s & $string($b)}};" +
+                "  $comma_join := $concat(' ... ');" +
+                "  $reduce([1,2,3,4,5], $comma_join)" +
+                ")" +
+                "      ");
             var result = expr.evaluate(null);
             var expected = "1 ... 2 ... 3 ... 4 ... 5";
             expect(result).to.deep.equal(expected);
@@ -7677,9 +7774,9 @@ describe('HOF - reduce', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $seq := [1,2,3,4,5];' +
-              '  $reduce($seq, function($x, $y){$x+$y}, 2)' +
-              ')' );
+                '  $seq := [1,2,3,4,5];' +
+                '  $reduce($seq, function($x, $y){$x+$y}, 2)' +
+                ')' );
             var result = expr.evaluate(null);
             var expected = 17;
             expect(result).to.deep.equal(expected);
@@ -7690,9 +7787,9 @@ describe('HOF - reduce', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $seq := 1;' +
-              '  $reduce($seq, function($x, $y){$x+$y})' +
-              ')' );
+                '  $seq := 1;' +
+                '  $reduce($seq, function($x, $y){$x+$y})' +
+                ')' );
             var result = expr.evaluate(null);
             var expected = 1;
             expect(result).to.deep.equal(expected);
@@ -7703,9 +7800,9 @@ describe('HOF - reduce', function () {
         it('should return result object', function () {
             var expr = jsonata(
                 '(' +
-              '  $seq := 1;' +
-              '  $reduce($seq, function($x, $y){$x+$y})' +
-              ')' );
+                '  $seq := 1;' +
+                '  $reduce($seq, function($x, $y){$x+$y})' +
+                ')' );
             var result = expr.evaluate(null);
             var expected = 1;
             expect(result).to.deep.equal(expected);
@@ -7733,9 +7830,9 @@ describe('HOF - reduce', function () {
     describe('power function using reduce', function () {
         it('should return result object', function () {
             var expr = jsonata('($product := function($a, $b) { $a * $b };' +
-              '$power := function($x, $n) { $n = 0 ? 1 : $reduce([1..$n].($x), $product) };' +
-              '[0..5].$power(2, $)' +
-              ')');
+                '$power := function($x, $n) { $n = 0 ? 1 : $reduce([1..$n].($x), $product) };' +
+                '[0..5].$power(2, $)' +
+                ')');
             var result = expr.evaluate();
             var expected = [1, 2, 4, 8, 16, 32];
             expect(result).to.deep.equal(expected);
@@ -7746,9 +7843,9 @@ describe('HOF - reduce', function () {
         it('should throw error', function () {
             var expr = jsonata(
                 '(' +
-              '  $seq := 1;' +
-              '  $reduce($seq, function($x){$x})' +
-              ')' );
+                '  $seq := 1;' +
+                '  $reduce($seq, function($x){$x})' +
+                ')' );
             expect(function () {
                 expr.evaluate();
             }).to.throw()
@@ -8485,9 +8582,9 @@ describe('Evaluator - function application operator', function () {
     describe('Chaining 2 partially applied functions', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$betweenBackets := $substringAfter(?, "(") ~> $substringBefore(?, ")");' +
-              '$betweenBackets("test(foo)bar")' +
-              ') ');
+                '$betweenBackets := $substringAfter(?, "(") ~> $substringBefore(?, ")");' +
+                '$betweenBackets("test(foo)bar")' +
+                ') ');
             var result = expr.evaluate();
             var expected = 'foo';
             expect(result).to.deep.equal(expected);
@@ -8497,12 +8594,12 @@ describe('Evaluator - function application operator', function () {
     describe('op chaining - reduce array of 2 functions', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$square := function($x){$x*$x};' +
-              '$chain := λ($f, $g){λ($x){$g($f($x))}};' +
-              '$instructions := [$sum, $square];' +
-              '$sumsq := $instructions ~> $reduce($chain);' +
-              '[1..5] ~> $sumsq()' +
-              ') ');
+                '$square := function($x){$x*$x};' +
+                '$chain := λ($f, $g){λ($x){$g($f($x))}};' +
+                '$instructions := [$sum, $square];' +
+                '$sumsq := $instructions ~> $reduce($chain);' +
+                '[1..5] ~> $sumsq()' +
+                ') ');
             var result = expr.evaluate();
             var expected = 225;
             expect(result).to.deep.equal(expected);
@@ -8512,12 +8609,12 @@ describe('Evaluator - function application operator', function () {
     describe('op chaining - reduce array of 3 functions', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$square := function($x){$x*$x};' +
-              '$chain := λ($f, $g){λ($x){ $x ~> $f ~> $g }};' +
-              '$instructions := [$sum, $square, $string];' +
-              '$sumsq := $instructions ~> $reduce($chain);' +
-              '[1..5] ~> $sumsq()' +
-              ') ');
+                '$square := function($x){$x*$x};' +
+                '$chain := λ($f, $g){λ($x){ $x ~> $f ~> $g }};' +
+                '$instructions := [$sum, $square, $string];' +
+                '$sumsq := $instructions ~> $reduce($chain);' +
+                '[1..5] ~> $sumsq()' +
+                ') ');
             var result = expr.evaluate();
             var expected = "225";
             expect(result).to.deep.equal(expected);
@@ -8527,10 +8624,10 @@ describe('Evaluator - function application operator', function () {
     describe('op chaining - square the sum', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$square := function($x){$x*$x};' +
-              '$instructions := $sum ~> $square;' +
-              '[1..5] ~> $instructions()' +
-              ')  ');
+                '$square := function($x){$x*$x};' +
+                '$instructions := $sum ~> $square;' +
+                '[1..5] ~> $instructions()' +
+                ')  ');
             var result = expr.evaluate();
             var expected = 225;
             expect(result).to.deep.equal(expected);
@@ -8540,10 +8637,10 @@ describe('Evaluator - function application operator', function () {
     describe('op chaining - sum of squares', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$square := function($x){$x*$x};' +
-              '$sum_of_squares := $map(?, $square) ~> $sum;' +
-              '[1..5] ~> $sum_of_squares()' +
-              ')  ');
+                '$square := function($x){$x*$x};' +
+                '$sum_of_squares := $map(?, $square) ~> $sum;' +
+                '[1..5] ~> $sum_of_squares()' +
+                ')  ');
             var result = expr.evaluate();
             var expected = 55;
             expect(result).to.deep.equal(expected);
@@ -8553,12 +8650,12 @@ describe('Evaluator - function application operator', function () {
     describe('op chaining - map/reduce 2', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$times := λ($x, $y) { $x * $y };' +
-              '$product := $reduce(?, $times);' +
-              '$square := function($x){$x*$x};' +
-              '$product_of_squares := $map(?, $square) ~> $product;' +
-              '[1..5] ~> $product_of_squares()' +
-              ')');
+                '$times := λ($x, $y) { $x * $y };' +
+                '$product := $reduce(?, $times);' +
+                '$square := function($x){$x*$x};' +
+                '$product_of_squares := $map(?, $square) ~> $product;' +
+                '[1..5] ~> $product_of_squares()' +
+                ')');
             var result = expr.evaluate();
             var expected = 14400;
             expect(result).to.deep.equal(expected);
@@ -8568,9 +8665,9 @@ describe('Evaluator - function application operator', function () {
     describe('op chaining - map/reduce 3', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$square := function($x){$x*$x};' +
-              '[1..5] ~> $map($square) ~> $reduce(λ($x, $y) { $x * $y });' +
-              ')');
+                '$square := function($x){$x*$x};' +
+                '[1..5] ~> $map($square) ~> $reduce(λ($x, $y) { $x * $y });' +
+                ')');
             var result = expr.evaluate();
             var expected = 14400;
             expect(result).to.deep.equal(expected);
@@ -8580,11 +8677,11 @@ describe('Evaluator - function application operator', function () {
     describe('op chaining - 3 arg map', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$prices := Account.Order.Product.Price;' +
-              '$quantities := Account.Order.Product.Quantity;' +
-              '$product := λ($arr) { $arr[0] * $arr[1] };' +
-              '$zip($prices, $quantities) ~> $map($product) ~> $sum()' +
-              ')');
+                '$prices := Account.Order.Product.Price;' +
+                '$quantities := Account.Order.Product.Quantity;' +
+                '$product := λ($arr) { $arr[0] * $arr[1] };' +
+                '$zip($prices, $quantities) ~> $map($product) ~> $sum()' +
+                ')');
             var result = expr.evaluate(testdata2);
             var expected = 336.36;
             expect(result).to.deep.equal(expected);
@@ -8834,11 +8931,11 @@ describe('Function signatures', function () {
     describe('Higher order function signature', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$twice := function($f)<f:f>{function($x)<n:n>{$f($f($x))}};' +
-              '$add2 := function($x)<n:n>{$x+2};' +
-              '$add4 := $twice($add2);' +
-              '$add4(5)' +
-              ')');
+                '$twice := function($f)<f:f>{function($x)<n:n>{$f($f($x))}};' +
+                '$add2 := function($x)<n:n>{$x+2};' +
+                '$add4 := $twice($add2);' +
+                '$add4(5)' +
+                ')');
             var result = expr.evaluate();
             var expected = 9;
             expect(result).to.deep.equal(expected);
@@ -8848,11 +8945,11 @@ describe('Function signatures', function () {
     describe('Higher order function signature with param', function () {
         it('should return result object', function () {
             var expr = jsonata('(' +
-              '$twice := function($f)<f<n:n>:f<n:n>>{function($x)<n:n>{$f($f($x))}};' +
-              '$add2 := function($x)<n:n>{$x+2};' +
-              '$add4 := $twice($add2);' +
-              '$add4(5)' +
-              ')');
+                '$twice := function($f)<f<n:n>:f<n:n>>{function($x)<n:n>{$f($f($x))}};' +
+                '$add2 := function($x)<n:n>{$x+2};' +
+                '$add4 := $twice($add2);' +
+                '$add4(5)' +
+                ')');
             var result = expr.evaluate();
             var expected = 9;
             expect(result).to.deep.equal(expected);
@@ -8935,9 +9032,9 @@ describe('Function signature violations', function () {
     describe('Error with function name', function () {
         it('should throw meaningful type error', function () {
             var expr = jsonata('(' +
-              '$fun := λ($arr)<a<n>>{$arr};' +
-              '$fun("f")' +
-              ')');
+                '$fun := λ($arr)<a<n>>{$arr};' +
+                '$fun("f")' +
+                ')');
             expect(function () {
                 expr.evaluate();
             }).to.throw()
@@ -8998,19 +9095,19 @@ describe('Transform', function () {
     describe('Invoice transformation', function () {
         it('should return result object', function () {
             var expr = jsonata("" +
-              "{'Order': Account.Order.{" +
-              "  'ID': OrderID," +
-              "  'Product': Product.{" +
-              "    'SKU': ProductID," +
-              "    'Details': {" +
-              "      'Weight': Description.Weight," +
-              "      'Dimensions': Description.(Width & ' x ' & Height & ' x ' & Depth)" +
-              "    }" +
-              "  }," +
-              "  'Total Price': $sum(Product.(Price * Quantity))" +
-              "}" +
-              "}" +
-              "");
+                "{'Order': Account.Order.{" +
+                "  'ID': OrderID," +
+                "  'Product': Product.{" +
+                "    'SKU': ProductID," +
+                "    'Details': {" +
+                "      'Weight': Description.Weight," +
+                "      'Dimensions': Description.(Width & ' x ' & Height & ' x ' & Depth)" +
+                "    }" +
+                "  }," +
+                "  'Total Price': $sum(Product.(Price * Quantity))" +
+                "}" +
+                "}" +
+                "");
             var result = expr.evaluate(testdata2);
             var expected = {
                 "Order": [
