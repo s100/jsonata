@@ -16,7 +16,7 @@ var fs = require("fs");
 
 var deleteFolderRecursive = function(path) {
     if( fs.existsSync(path) ) {
-        fs.readdirSync(path).forEach(function(file,index){
+        fs.readdirSync(path).forEach(function(file){
             var curPath = path + "/" + file;
             if(fs.lstatSync(curPath).isDirectory()) {
                 deleteFolderRecursive(curPath);
@@ -30,7 +30,7 @@ var deleteFolderRecursive = function(path) {
 deleteFolderRecursive("DUMP");
 
 var oldit = it;
-it = function() {
+it = function() { // eslint-disable-line no-global-assign
     var oldF = arguments[1];
     arguments[1] = function() {
         var path = [];
